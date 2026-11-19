@@ -1,7 +1,8 @@
 import { CONVERTER_VERSION, convertIbisBuffer, seconds, sourceHash, spiceNumber } from "./convert"
 import { cornerValue, IbisError, parseIbis } from "./parse-ibis"
+import { IBIS_REFERENCE_ERROR_CODES, resolveIbisReferences } from "./references"
 import { validateIbisDefinitionSource } from "./validate-source"
-import type { ConvertedBuffer, ConvertedGeneralIbisComponent, IbisBitsStimulus, IbisBuffer, IbisComponent, IbisConversionMetadata, IbisCorner, IbisModelDefinition, IbisReferencePorts, IbisRunConfig, IbisTimeInput } from "./types"
+import type { ConvertedBuffer, ConvertedGeneralIbisComponent, IbisBitsStimulus, IbisComponent, IbisConversionMetadata, IbisCorner, IbisModelDefinition, IbisRunConfig, IbisTimeInput } from "./types"
 
 /** The TSX API uses milliseconds; legacy converter APIs continue to use seconds. */
 export function ibisTimeSeconds(value: IbisTimeInput, allowZero = false): number {
@@ -74,39 +75,6 @@ export function bitWeights(converted: ConvertedBuffer, schedule: LogicalSchedule
   return samples
 }
 
-function resolveReferences(component: IbisComponent, definition: IbisModelDefinition, physicalPin: string, buffer: IbisBuffer): Required<Omit<IbisReferencePorts, "external">> & Pick<IbisReferencePorts, "external"> {
-  const explicit = definition.references?.[physicalPin] ?? {}, vendor = component.pinMapping[physicalPin]
-  for (const [key, value] of Object.entries(explicit)) if (value !== undefined && (typeof value !== "string" || !value))
-    throw new IbisError("invalid_reference", `${physicalPin}: ${key} reference must name a local TSX port`)
-  const infer = (key: "pullup" | "pulldown" | "powerClamp" | "groundClamp" | "external"): string => {
-    if (explicit[key]) return explicit[key]!
-    const kind = key === "pullup" || key === "powerClamp" || key === "external" ? "power" : "gnd"
-    const network = vendor?.[key]
-    const candidates = Object.entries(definition.pinMap).filter(([pin]) => {
-      const candidate = component.pins[pin]
-      if (candidate?.model.toLowerCase() !== kind) return false
-      return !network || component.pinMapping[pin]?.[key === "external" ? "pullup" : key] === network || candidate.signal === network || pin === network
-    }).map(([, port]) => port)
-    const unique = [...new Set(candidates)]
-    if (unique.length !== 1) throw new IbisError("ambiguous_reference", `${physicalPin}: explicit ${key} reference required; vendor data does not identify exactly one mapped ${kind} port`)
-    return unique[0]
-  }
-  const pullup = infer("pullup"), pulldown = infer("pulldown")
-  const selectedReference = (value: IbisBuffer["voltage"], label: string) => cornerValue(value, definition.corner, label)
-  const nominalPullup = selectedReference(buffer.pullupReference ?? buffer.voltage, "pullup reference")
-  const nominalPulldown = selectedReference(buffer.pulldownReference ?? [0, 0, 0], "pulldown reference")
-  if (buffer.powerClamp && !explicit.powerClamp && !vendor?.powerClamp && selectedReference(buffer.powerClampReference ?? buffer.voltage, "power clamp reference") !== nominalPullup)
-    throw new IbisError("ambiguous_reference", `${physicalPin}: explicit powerClamp reference required because vendor scalar reference differs from pullup and no vendor clamp network identifies the rail`)
-  if (buffer.groundClamp && !explicit.groundClamp && !vendor?.groundClamp && selectedReference(buffer.groundClampReference ?? [0, 0, 0], "ground clamp reference") !== nominalPulldown)
-    throw new IbisError("ambiguous_reference", `${physicalPin}: explicit groundClamp reference required because vendor scalar reference differs from pulldown and no vendor clamp network identifies the rail`)
-  // Missing clamp mappings follow their corresponding explicit output references.
-  const powerClamp = explicit.powerClamp || vendor?.powerClamp ? infer("powerClamp") : pullup
-  const groundClamp = explicit.groundClamp || vendor?.groundClamp ? infer("groundClamp") : pulldown
-  if (pullup === pulldown) throw new IbisError("invalid_reference", `${physicalPin}: pullup and pulldown references must differ`)
-  const external = explicit.external || vendor?.external ? infer("external") : undefined
-  return { pullup, pulldown, powerClamp, groundClamp, ...(external ? { external } : {}) }
-}
-
 function pinPackage(component: IbisComponent, physicalPin: string, corner: IbisCorner): [number, number, number] {
   const pin = component.pins[physicalPin]
   const values = (["resistance", "inductance", "capacitance"] as const).map((field) => pin[field] ?? (component.package[field] && cornerValue(component.package[field], corner, `${physicalPin} package ${field}`)))
@@ -155,7 +123,13 @@ export function convertIbisModelToSpice(input: string | Uint8Array, definition: 
     if (enabled && !stimulus) throw new IbisError("missing_stimulus", `${port}: enabled output needs exactly one explicit bit stimulus`)
     if (!enabled && stimulus) throw new IbisError("invalid_stimulus", `${port}: input/disabled output cannot have a drive stimulus`)
     const schedule = stimulus ? logicalBitSchedule(stimulus, run.duration, buffer.polarity) : undefined
-    const references = resolveReferences(component, definition, physicalPin, buffer)
+    const references = resolveIbisReferences({
+      component,
+      pin: physicalPin,
+      pinToSourcePort: definition.pinMap,
+      explicitReferences: definition.references?.[physicalPin],
+      voltageCheck: { buffer, corner: definition.corner },
+    })
     for (const pair of component.differentialPins.filter((pair) => pair.pin === physicalPin || pair.invertedPin === physicalPin)) {
       const delay = pair.delay[{ typical: 0, minimum: 1, maximum: 2 }[definition.corner]]
       if (delay !== null && delay !== 0) throw new IbisError("unsupported_diff_delay", `${physicalPin}: nonzero vendor differential pair delay is unsupported`)
@@ -182,7 +156,7 @@ export function convertIbisModelToSpice(input: string | Uint8Array, definition: 
   }
   const metadata: IbisConversionMetadata = { converterVersion: CONVERTER_VERSION, sourceSha256: hash, packagePolicy: definition.packagePolicy, tableExtrapolation: "hold-endpoint-current", omissions, packageData, differentialPins: component.differentialPins, pins }
   const name = `IBIS_${sourceHash(JSON.stringify([metadata, schedules, duration])).slice(0, 20)}`
-  if (rails.some((rail) => signalPorts.has(rail))) throw new IbisError("invalid_reference", "A signal port cannot also serve as a buffer reference rail")
+  if (rails.some((rail) => signalPorts.has(rail))) throw new IbisError(IBIS_REFERENCE_ERROR_CODES.invalid, "A signal port cannot also serve as a buffer reference rail")
   const mapping: Record<string, string> = Object.fromEntries(signals.map(([, port], i) => [`PAD${i}`, port]))
   rails.forEach((port, i) => { mapping[`REF${i}`] = port })
   const refNode = (port: string) => `REF${rails.indexOf(port)}`
