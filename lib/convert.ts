@@ -1,6 +1,7 @@
 import { sha256 } from "@noble/hashes/sha256"
 import { bytesToHex } from "@noble/hashes/utils"
 import { cornerValue, IbisError, parseIbis } from "./parse-ibis"
+import { resolveIbisReferenceVoltages } from "./references"
 import type {
   ConvertedBuffer,
   ConvertedIbisComponent,
@@ -9,7 +10,6 @@ import type {
   IbisCorner,
   IbisDocument,
   IbisModelConfig,
-  IbisRange,
   IbisTable,
 } from "./types"
 
@@ -58,33 +58,17 @@ function cornerTable(
     ]
   return table.map(([x, ...values]) => [x, cornerValue(values, corner, field)])
 }
-function reference(
-  range: IbisRange | undefined,
-  fallback: number,
-  corner: IbisCorner,
-  field: string,
-): number {
-  return range ? cornerValue(range, corner, field) : fallback
-}
-
 /** IBIS 4.2 §6: output tables exclude clamps; add the clamp currents separately. */
 export function bufferTables(buffer: IbisBuffer, corner: IbisCorner) {
-  const vdd = cornerValue(buffer.voltage, corner, `${buffer.name} voltage`)
+  const { pullup, pulldown, powerClamp, groundClamp } =
+    resolveIbisReferenceVoltages({ buffer, corner })
+  const vdd =
+    buffer.voltage?.[{ typical: 0, minimum: 1, maximum: 2 }[corner]] ?? undefined
   const refs = {
-    pu: reference(buffer.pullupReference, vdd, corner, "pullup reference"),
-    pd: reference(buffer.pulldownReference, 0, corner, "pulldown reference"),
-    pc: reference(
-      buffer.powerClampReference,
-      vdd,
-      corner,
-      "power clamp reference",
-    ),
-    gc: reference(
-      buffer.groundClampReference,
-      0,
-      corner,
-      "ground clamp reference",
-    ),
+    pu: pullup,
+    pd: pulldown,
+    pc: powerClamp,
+    gc: groundClamp,
   }
   const raw = {
     pu: cornerTable(buffer.pullup, corner, "pullup"),
@@ -198,14 +182,10 @@ export function convertIbisBuffer(
       "invalid_options",
       "Choose a supported IBIS corner and input/output mode",
     )
-  if (
-    cornerValue(buffer.voltage, corner, "voltage") <= 0 ||
-    cornerValue(buffer.capacitance, corner, "C_comp") < 0
-  )
-    throw new IbisError(
-      "invalid_electrical_value",
-      `${model}: supply must be positive and C_comp nonnegative`,
-    )
+  const supply = options.separateReferences
+    ? undefined
+    : cornerValue(buffer.voltage, corner, "voltage")
+  const capacitance = cornerValue(buffer.capacitance, corner, "C_comp")
   if (!["input", "output", "i/o", "3-state"].includes(buffer.type))
     throw new IbisError(
       "unsupported_model_type",
@@ -227,6 +207,11 @@ export function convertIbisBuffer(
       "SPICE subcircuit name must be an identifier",
     )
   const tables = bufferTables(buffer, corner)
+  if ((tables.vdd !== undefined && tables.vdd <= 0) || capacitance < 0)
+    throw new IbisError(
+      "invalid_electrical_value",
+      `${model}: supply must be positive and C_comp nonnegative`,
+    )
   const referenceNode = (key: "pu" | "pd" | "pc" | "gc") => options.separateReferences
     ? ({ pu: "PU_REF", pd: "PD_REF", pc: "PC_REF", gc: "GC_REF" }[key])
     : key === "pu" || key === "pc" ? "VDD" : "VSS"
@@ -235,15 +220,15 @@ export function convertIbisBuffer(
   const lines = [
     `* IBIS ${model}; ${corner}; converter ${CONVERTER_VERSION}; package excluded`,
     `.subckt ${name} PAD ${options.separateReferences ? "PU_REF PD_REF PC_REF GC_REF" : "VDD VSS"}${options.externalReference ? " EXT_REF" : ""}${options.mode === "output" ? " KU KD" : ""}`,
-    `Ccomp PAD ${groundNode} ${spiceNumber(cornerValue(buffer.capacitance, corner, "C_comp"))}`,
+    `Ccomp PAD ${groundNode} ${spiceNumber(capacitance)}`,
   ]
   for (const key of ["pu", "pd", "pc", "gc"] as const) {
     if (options.mode === "input" && (key === "pu" || key === "pd")) continue
     const pullupSide = key === "pu" || key === "pc"
-    const expression = options.separateReferences
+    const expression = supply === undefined
       ? pullupSide ? `V(${referenceNode(key)},PAD)` : `V(PAD,${referenceNode(key)})`
       : pullupSide
-        ? `V(${referenceNode(key)},PAD)+(${spiceNumber(tables.refs[key] - tables.vdd)})`
+        ? `V(${referenceNode(key)},PAD)+(${spiceNumber(tables.refs[key] - supply)})`
         : `V(PAD,${referenceNode(key)})-(${spiceNumber(tables.refs[key])})`
     const pairs = tables.raw[key]
       .map(([x, y]) => `${spiceNumber(x)},${spiceNumber(y)}`)

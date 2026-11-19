@@ -23,7 +23,12 @@ export interface IbisWaveform {
   kind: "rising" | "falling"
   resistance: number
   fixtureVoltage: IbisRange
-  data: IbisTable
+  data: Array<[
+    timeSeconds: number,
+    typicalVoltage: number,
+    minimumVoltage: number | null,
+    maximumVoltage: number | null,
+  ]>
 }
 
 export interface IbisBuffer {
@@ -31,7 +36,8 @@ export interface IbisBuffer {
   type: string
   polarity?: "non-inverting" | "inverting"
   enable?: "active-high" | "active-low"
-  voltage: IbisRange
+  /** The optional [Voltage Range] keyword. */
+  voltage?: IbisRange
   capacitance: IbisRange
   pullup?: IbisTable
   pulldown?: IbisTable
@@ -137,6 +143,12 @@ export interface IbisReferencePorts {
 /** Resolved source ports for the four drive and clamp rails and the optional external rail. */
 export type ResolvedIbisReferencePorts =
   Required<Omit<IbisReferencePorts, "external">> & Pick<IbisReferencePorts, "external">
+
+/** Scalar reference voltages in volts for the drive and clamp tables. */
+export type IbisReferenceVoltages = Record<
+  keyof Omit<ResolvedIbisReferencePorts, "external">,
+  number
+>
 
 export interface IbisModelDefinition {
   source: IbisSource

@@ -39,8 +39,8 @@ function ibisNumber(token) {
   return value;
 }
 function cornerValue(values, corner, field) {
-  const value = values[{ typical: 0, minimum: 1, maximum: 2 }[corner]];
-  if (value === null)
+  const value = values?.[{ typical: 0, minimum: 1, maximum: 2 }[corner]];
+  if (value === null || value === void 0)
     throw new IbisError("missing_corner", `${field} has no ${corner} value`);
   return value;
 }
@@ -125,7 +125,6 @@ function parseBuffer(name, text) {
     type: first.model_type?.[0]?.toLowerCase() ?? "",
     polarity: first.polarity?.[0]?.toLowerCase(),
     enable: first.enable?.[0]?.toLowerCase(),
-    voltage: [null, null, null],
     capacitance: range(first.c_comp ?? []),
     waveforms: []
   };
@@ -215,7 +214,14 @@ function parseBuffer(name, text) {
           ibisNumber(fields.v_fixture_min?.[0] ?? String(fixture)),
           ibisNumber(fields.v_fixture_max?.[0] ?? String(fixture))
         ],
-        data: table(section)
+        data: table(section).map(([time, typical, minimum, maximum]) => {
+          if (typical === null)
+            throw new IbisError(
+              "missing_corner",
+              `${name}: ${section.key} sample at ${time} s has no typical value`
+            );
+          return [time, typical, minimum, maximum];
+        })
       };
       buffer.waveforms.push(waveform);
     }
@@ -342,6 +348,127 @@ function parseIbis(text) {
   };
 }
 
+// lib/references.ts
+var IBIS_REFERENCE_ERROR_CODES = {
+  ambiguous: "ambiguous_reference",
+  invalid: "invalid_reference",
+  shorted: "invalid_reference"
+};
+var IbisReferenceError = class extends IbisError {
+  constructor(reason, message) {
+    super(IBIS_REFERENCE_ERROR_CODES[reason], message);
+    this.reason = reason;
+  }
+  reason;
+};
+var GROUND_REFERENCE = [0, 0, 0];
+function resolveIbisReferenceVoltages({
+  buffer,
+  corner
+}) {
+  const { voltage } = buffer;
+  if (voltage) cornerValue(voltage, "typical", "voltage");
+  const ground = voltage ? GROUND_REFERENCE : void 0;
+  return {
+    pullup: cornerValue(
+      buffer.pullupReference ?? voltage,
+      corner,
+      "pullup reference"
+    ),
+    pulldown: cornerValue(
+      buffer.pulldownReference ?? ground,
+      corner,
+      "pulldown reference"
+    ),
+    powerClamp: cornerValue(
+      buffer.powerClampReference ?? voltage,
+      corner,
+      "power clamp reference"
+    ),
+    groundClamp: cornerValue(
+      buffer.groundClampReference ?? ground,
+      corner,
+      "ground clamp reference"
+    )
+  };
+}
+function resolveIbisReferences({
+  component,
+  pin,
+  pinToSourcePort,
+  explicitReferences,
+  voltageCheck
+}) {
+  const explicit = explicitReferences ?? {};
+  const vendor = component.pinMapping[pin];
+  for (const [role, port] of Object.entries(explicit)) {
+    if (port !== void 0 && (typeof port !== "string" || !port)) {
+      throw new IbisReferenceError(
+        "invalid",
+        `${pin}: ${role} reference must name a local TSX port`
+      );
+    }
+  }
+  const infer = (role) => {
+    const override = explicit[role];
+    if (override) return override;
+    const kind = role === "pulldown" || role === "groundClamp" ? "gnd" : "power";
+    const network = vendor?.[role];
+    const railRole = role === "external" ? "pullup" : role;
+    const candidates = /* @__PURE__ */ new Set();
+    for (const [railPin, port2] of Object.entries(pinToSourcePort)) {
+      const candidate = component.pins[railPin];
+      if (candidate?.model.toLowerCase() !== kind) continue;
+      if (!network || component.pinMapping[railPin]?.[railRole] === network || candidate.signal === network || railPin === network) {
+        candidates.add(port2);
+      }
+    }
+    const [port] = candidates;
+    if (candidates.size !== 1) {
+      throw new IbisReferenceError(
+        "ambiguous",
+        `${pin}: explicit ${role} reference required; vendor data does not identify exactly one mapped ${kind} port`
+      );
+    }
+    return port;
+  };
+  const pullup = infer("pullup");
+  const pulldown = infer("pulldown");
+  if (voltageCheck) {
+    const { buffer } = voltageCheck;
+    const nominal = resolveIbisReferenceVoltages(voltageCheck);
+    if (buffer.powerClamp && !explicit.powerClamp && !vendor?.powerClamp && nominal.powerClamp !== nominal.pullup) {
+      throw new IbisReferenceError(
+        "ambiguous",
+        `${pin}: explicit powerClamp reference required because vendor scalar reference differs from pullup and no vendor clamp network identifies the rail`
+      );
+    }
+    if (buffer.groundClamp && !explicit.groundClamp && !vendor?.groundClamp && nominal.groundClamp !== nominal.pulldown) {
+      throw new IbisReferenceError(
+        "ambiguous",
+        `${pin}: explicit groundClamp reference required because vendor scalar reference differs from pulldown and no vendor clamp network identifies the rail`
+      );
+    }
+  }
+  const references = {
+    pullup,
+    pulldown,
+    powerClamp: explicit.powerClamp || vendor?.powerClamp ? infer("powerClamp") : pullup,
+    groundClamp: explicit.groundClamp || vendor?.groundClamp ? infer("groundClamp") : pulldown
+  };
+  if (pullup === pulldown) {
+    throw new IbisReferenceError(
+      "shorted",
+      `${pin}: pullup and pulldown references must differ`
+    );
+  }
+  if (explicit.external || vendor?.external) {
+    const external = infer("external");
+    if (external) references.external = external;
+  }
+  return references;
+}
+
 // lib/convert.ts
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex } from "@noble/hashes/utils";
@@ -379,26 +506,14 @@ function cornerTable(table2, corner, field) {
     ];
   return table2.map(([x, ...values]) => [x, cornerValue(values, corner, field)]);
 }
-function reference(range2, fallback, corner, field) {
-  return range2 ? cornerValue(range2, corner, field) : fallback;
-}
 function bufferTables(buffer, corner) {
-  const vdd = cornerValue(buffer.voltage, corner, `${buffer.name} voltage`);
+  const { pullup, pulldown, powerClamp, groundClamp } = resolveIbisReferenceVoltages({ buffer, corner });
+  const vdd = buffer.voltage?.[{ typical: 0, minimum: 1, maximum: 2 }[corner]] ?? void 0;
   const refs = {
-    pu: reference(buffer.pullupReference, vdd, corner, "pullup reference"),
-    pd: reference(buffer.pulldownReference, 0, corner, "pulldown reference"),
-    pc: reference(
-      buffer.powerClampReference,
-      vdd,
-      corner,
-      "power clamp reference"
-    ),
-    gc: reference(
-      buffer.groundClampReference,
-      0,
-      corner,
-      "ground clamp reference"
-    )
+    pu: pullup,
+    pd: pulldown,
+    pc: powerClamp,
+    gc: groundClamp
   };
   const raw = {
     pu: cornerTable(buffer.pullup, corner, "pullup"),
@@ -479,11 +594,8 @@ function convertIbisBuffer(document, model, options) {
       "invalid_options",
       "Choose a supported IBIS corner and input/output mode"
     );
-  if (cornerValue(buffer.voltage, corner, "voltage") <= 0 || cornerValue(buffer.capacitance, corner, "C_comp") < 0)
-    throw new IbisError(
-      "invalid_electrical_value",
-      `${model}: supply must be positive and C_comp nonnegative`
-    );
+  const supply = options.separateReferences ? void 0 : cornerValue(buffer.voltage, corner, "voltage");
+  const capacitance = cornerValue(buffer.capacitance, corner, "C_comp");
   if (!["input", "output", "i/o", "3-state"].includes(buffer.type))
     throw new IbisError(
       "unsupported_model_type",
@@ -501,17 +613,22 @@ function convertIbisBuffer(document, model, options) {
       "SPICE subcircuit name must be an identifier"
     );
   const tables = bufferTables(buffer, corner);
+  if (tables.vdd !== void 0 && tables.vdd <= 0 || capacitance < 0)
+    throw new IbisError(
+      "invalid_electrical_value",
+      `${model}: supply must be positive and C_comp nonnegative`
+    );
   const referenceNode = (key) => options.separateReferences ? { pu: "PU_REF", pd: "PD_REF", pc: "PC_REF", gc: "GC_REF" }[key] : key === "pu" || key === "pc" ? "VDD" : "VSS";
   const groundNode = options.separateReferences ? "PD_REF" : "VSS";
   const lines2 = [
     `* IBIS ${model}; ${corner}; converter ${CONVERTER_VERSION}; package excluded`,
     `.subckt ${name} PAD ${options.separateReferences ? "PU_REF PD_REF PC_REF GC_REF" : "VDD VSS"}${options.externalReference ? " EXT_REF" : ""}${options.mode === "output" ? " KU KD" : ""}`,
-    `Ccomp PAD ${groundNode} ${spiceNumber(cornerValue(buffer.capacitance, corner, "C_comp"))}`
+    `Ccomp PAD ${groundNode} ${spiceNumber(capacitance)}`
   ];
   for (const key of ["pu", "pd", "pc", "gc"]) {
     if (options.mode === "input" && (key === "pu" || key === "pd")) continue;
     const pullupSide = key === "pu" || key === "pc";
-    const expression = options.separateReferences ? pullupSide ? `V(${referenceNode(key)},PAD)` : `V(PAD,${referenceNode(key)})` : pullupSide ? `V(${referenceNode(key)},PAD)+(${spiceNumber(tables.refs[key] - tables.vdd)})` : `V(PAD,${referenceNode(key)})-(${spiceNumber(tables.refs[key])})`;
+    const expression = supply === void 0 ? pullupSide ? `V(${referenceNode(key)},PAD)` : `V(PAD,${referenceNode(key)})` : pullupSide ? `V(${referenceNode(key)},PAD)+(${spiceNumber(tables.refs[key] - supply)})` : `V(PAD,${referenceNode(key)})-(${spiceNumber(tables.refs[key])})`;
     const pairs = tables.raw[key].map(([x, y]) => `${spiceNumber(x)},${spiceNumber(y)}`).join(",");
     const boundedExpression = `min(max(${expression},${spiceNumber(tables.raw[key][0][0])}),${spiceNumber(tables.raw[key].at(-1)[0])})`;
     const factor = key === "pu" || key === "pd" ? `V(K${key === "pu" ? "U" : "D"},${groundNode})*` : "";
@@ -890,6 +1007,10 @@ export {
   ibisNumber,
   cornerValue,
   parseIbis,
+  IBIS_REFERENCE_ERROR_CODES,
+  IbisReferenceError,
+  resolveIbisReferenceVoltages,
+  resolveIbisReferences,
   CONVERTER_VERSION,
   sourceHash,
   spiceNumber,
