@@ -1,6 +1,8 @@
 import {
   CONVERTER_VERSION,
+  IBIS_REFERENCE_ERROR_CODES,
   IbisError,
+  IbisReferenceError,
   bufferTables,
   clockWeights,
   convertIbisBuffer,
@@ -13,119 +15,14 @@ import {
   loadIbisSource,
   parseIbis,
   resolveIbisModel,
+  resolveIbisReferenceVoltages,
+  resolveIbisReferences,
   seconds,
   sourceHash,
   spiceNumber,
   switchingWeights,
   validateIbisDefinitionSource
-} from "./chunk-M5OFY2K4.js";
-
-// lib/references.ts
-var IBIS_REFERENCE_ERROR_CODES = {
-  ambiguous: "ambiguous_reference",
-  invalid: "invalid_reference",
-  shorted: "invalid_reference"
-};
-var IbisReferenceError = class extends IbisError {
-  constructor(reason, message) {
-    super(IBIS_REFERENCE_ERROR_CODES[reason], message);
-    this.reason = reason;
-  }
-  reason;
-};
-function resolveIbisReferences({
-  component,
-  pin,
-  pinToSourcePort,
-  explicitReferences,
-  voltageCheck
-}) {
-  const explicit = explicitReferences ?? {};
-  const vendor = component.pinMapping[pin];
-  for (const [role, port] of Object.entries(explicit)) {
-    if (port !== void 0 && (typeof port !== "string" || !port)) {
-      throw new IbisReferenceError(
-        "invalid",
-        `${pin}: ${role} reference must name a local TSX port`
-      );
-    }
-  }
-  const infer = (role) => {
-    const override = explicit[role];
-    if (override) return override;
-    const kind = role === "pulldown" || role === "groundClamp" ? "gnd" : "power";
-    const network = vendor?.[role];
-    const railRole = role === "external" ? "pullup" : role;
-    const candidates = /* @__PURE__ */ new Set();
-    for (const [railPin, port2] of Object.entries(pinToSourcePort)) {
-      const candidate = component.pins[railPin];
-      if (candidate?.model.toLowerCase() !== kind) continue;
-      if (!network || component.pinMapping[railPin]?.[railRole] === network || candidate.signal === network || railPin === network) {
-        candidates.add(port2);
-      }
-    }
-    const [port] = candidates;
-    if (candidates.size !== 1) {
-      throw new IbisReferenceError(
-        "ambiguous",
-        `${pin}: explicit ${role} reference required; vendor data does not identify exactly one mapped ${kind} port`
-      );
-    }
-    return port;
-  };
-  const pullup = infer("pullup");
-  const pulldown = infer("pulldown");
-  if (voltageCheck) {
-    const { buffer, corner } = voltageCheck;
-    const nominalPullup = cornerValue(
-      buffer.pullupReference ?? buffer.voltage,
-      corner,
-      "pullup reference"
-    );
-    const nominalPulldown = cornerValue(
-      buffer.pulldownReference ?? [0, 0, 0],
-      corner,
-      "pulldown reference"
-    );
-    if (buffer.powerClamp && !explicit.powerClamp && !vendor?.powerClamp && cornerValue(
-      buffer.powerClampReference ?? buffer.voltage,
-      corner,
-      "power clamp reference"
-    ) !== nominalPullup) {
-      throw new IbisReferenceError(
-        "ambiguous",
-        `${pin}: explicit powerClamp reference required because vendor scalar reference differs from pullup and no vendor clamp network identifies the rail`
-      );
-    }
-    if (buffer.groundClamp && !explicit.groundClamp && !vendor?.groundClamp && cornerValue(
-      buffer.groundClampReference ?? [0, 0, 0],
-      corner,
-      "ground clamp reference"
-    ) !== nominalPulldown) {
-      throw new IbisReferenceError(
-        "ambiguous",
-        `${pin}: explicit groundClamp reference required because vendor scalar reference differs from pulldown and no vendor clamp network identifies the rail`
-      );
-    }
-  }
-  const references = {
-    pullup,
-    pulldown,
-    powerClamp: explicit.powerClamp || vendor?.powerClamp ? infer("powerClamp") : pullup,
-    groundClamp: explicit.groundClamp || vendor?.groundClamp ? infer("groundClamp") : pulldown
-  };
-  if (pullup === pulldown) {
-    throw new IbisReferenceError(
-      "shorted",
-      `${pin}: pullup and pulldown references must differ`
-    );
-  }
-  if (explicit.external || vendor?.external) {
-    const external = infer("external");
-    if (external) references.external = external;
-  }
-  return references;
-}
+} from "./chunk-M74AOCNJ.js";
 
 // lib/general.ts
 function ibisTimeSeconds(value, allowZero = false) {
@@ -325,6 +222,7 @@ export {
   logicalBitSchedule,
   parseIbis,
   resolveIbisModel,
+  resolveIbisReferenceVoltages,
   resolveIbisReferences,
   seconds,
   sourceHash,

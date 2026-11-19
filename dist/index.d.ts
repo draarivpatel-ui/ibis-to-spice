@@ -20,14 +20,20 @@ interface IbisWaveform {
     kind: "rising" | "falling";
     resistance: number;
     fixtureVoltage: IbisRange;
-    data: IbisTable;
+    data: Array<[
+        timeSeconds: number,
+        typicalVoltage: number,
+        minimumVoltage: number | null,
+        maximumVoltage: number | null
+    ]>;
 }
 interface IbisBuffer {
     name: string;
     type: string;
     polarity?: "non-inverting" | "inverting";
     enable?: "active-high" | "active-low";
-    voltage: IbisRange;
+    /** The optional [Voltage Range] keyword. */
+    voltage?: IbisRange;
     capacitance: IbisRange;
     pullup?: IbisTable;
     pulldown?: IbisTable;
@@ -158,6 +164,8 @@ interface IbisReferencePorts {
 }
 /** Resolved source ports for the four drive and clamp rails and the optional external rail. */
 type ResolvedIbisReferencePorts = Required<Omit<IbisReferencePorts, "external">> & Pick<IbisReferencePorts, "external">;
+/** Scalar reference voltages in volts for the drive and clamp tables. */
+type IbisReferenceVoltages = Record<keyof Omit<ResolvedIbisReferencePorts, "external">, number>;
 interface IbisModelDefinition {
     source: IbisSource;
     component: string;
@@ -232,7 +240,7 @@ declare class IbisError extends Error {
     constructor(code: string, message: string);
 }
 declare function ibisNumber(token: string): number | null;
-declare function cornerValue(values: IbisRange, corner: "typical" | "minimum" | "maximum", field: string): number;
+declare function cornerValue(values: IbisRange | undefined, corner: "typical" | "minimum" | "maximum", field: string): number;
 /** Parse metadata once, then parse only selected buffers; large vendor files stay usable. */
 declare function parseIbis(text: string): IbisDocument;
 
@@ -260,7 +268,7 @@ declare function bufferTables(buffer: IbisBuffer, corner: IbisCorner): {
         pc: number;
         gc: number;
     };
-    vdd: number;
+    vdd: number | undefined;
 };
 declare function switchingWeights(buffer: IbisBuffer, corner: IbisCorner, edge: "rising" | "falling"): Array<[number, number, number]>;
 declare function convertIbisBuffer(document: IbisDocument, model: string, options: {
@@ -325,6 +333,11 @@ declare class IbisReferenceError extends IbisError {
     readonly reason: keyof typeof IBIS_REFERENCE_ERROR_CODES;
     constructor(reason: keyof typeof IBIS_REFERENCE_ERROR_CODES, message: string);
 }
+/** Resolve the four scalar references using the IBIS 7.2 §6.1 defaults. */
+declare function resolveIbisReferenceVoltages({ buffer, corner, }: {
+    buffer: IbisBuffer;
+    corner: IbisCorner;
+}): IbisReferenceVoltages;
 /** Resolve the local reference ports for a physical IBIS signal pin. */
 declare function resolveIbisReferences({ component, pin, pinToSourcePort, explicitReferences, voltageCheck, }: {
     component: IbisComponent;
@@ -338,4 +351,4 @@ declare function resolveIbisReferences({ component, pin, pinToSourcePort, explic
     };
 }): ResolvedIbisReferencePorts;
 
-export { CONVERTER_VERSION, type ConvertedBuffer, type ConvertedGeneralIbisComponent, type ConvertedIbisComponent, IBIS_REFERENCE_ERROR_CODES, type IbisBitsStimulus, type IbisBuffer, type IbisClock, type IbisComponent, type IbisConversionMetadata, type IbisCorner, type IbisDocument, IbisError, type IbisFetch, type IbisModelConfig, type IbisModelDefinition, type IbisPackagePin, type IbisPinBinding, type IbisPinRunState, type IbisRamp, type IbisRampRatio, type IbisRange, IbisReferenceError, type IbisReferencePorts, type IbisRunConfig, type IbisSource, type IbisTable, type IbisTimeInput, type IbisWaveform, type LogicalSchedule, type LogicalTransition, type ResolvedIbisReferencePorts, bitWeights, bufferTables, clockWeights, convertIbisBuffer, convertIbisComponentToSpice, convertIbisModelToSpice, cornerValue, createIbisModelResolver, ibisNumber, ibisTimeSeconds, interpolate, loadIbisDefinitionSource, loadIbisSource, logicalBitSchedule, parseIbis, resolveIbisModel, resolveIbisReferences, seconds, sourceHash, spiceNumber, switchingWeights };
+export { CONVERTER_VERSION, type ConvertedBuffer, type ConvertedGeneralIbisComponent, type ConvertedIbisComponent, IBIS_REFERENCE_ERROR_CODES, type IbisBitsStimulus, type IbisBuffer, type IbisClock, type IbisComponent, type IbisConversionMetadata, type IbisCorner, type IbisDocument, IbisError, type IbisFetch, type IbisModelConfig, type IbisModelDefinition, type IbisPackagePin, type IbisPinBinding, type IbisPinRunState, type IbisRamp, type IbisRampRatio, type IbisRange, IbisReferenceError, type IbisReferencePorts, type IbisReferenceVoltages, type IbisRunConfig, type IbisSource, type IbisTable, type IbisTimeInput, type IbisWaveform, type LogicalSchedule, type LogicalTransition, type ResolvedIbisReferencePorts, bitWeights, bufferTables, clockWeights, convertIbisBuffer, convertIbisComponentToSpice, convertIbisModelToSpice, cornerValue, createIbisModelResolver, ibisNumber, ibisTimeSeconds, interpolate, loadIbisDefinitionSource, loadIbisSource, logicalBitSchedule, parseIbis, resolveIbisModel, resolveIbisReferenceVoltages, resolveIbisReferences, seconds, sourceHash, spiceNumber, switchingWeights };

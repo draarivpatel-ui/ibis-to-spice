@@ -3,7 +3,9 @@ import type {
   IbisBuffer,
   IbisComponent,
   IbisCorner,
+  IbisRange,
   IbisReferencePorts,
+  IbisReferenceVoltages,
   ResolvedIbisReferencePorts,
 } from "./types"
 
@@ -20,6 +22,44 @@ export class IbisReferenceError extends IbisError {
     message: string,
   ) {
     super(IBIS_REFERENCE_ERROR_CODES[reason], message)
+  }
+}
+
+const GROUND_REFERENCE: IbisRange = [0, 0, 0]
+
+/** Resolve the four scalar references using the IBIS 7.2 §6.1 defaults. */
+export function resolveIbisReferenceVoltages({
+  buffer,
+  corner,
+}: {
+  buffer: IbisBuffer
+  corner: IbisCorner
+}): IbisReferenceVoltages {
+  const { voltage } = buffer
+  // Without [Voltage Range], all four references are required.
+  if (voltage) cornerValue(voltage, "typical", "voltage")
+  const ground = voltage ? GROUND_REFERENCE : undefined
+  return {
+    pullup: cornerValue(
+      buffer.pullupReference ?? voltage,
+      corner,
+      "pullup reference",
+    ),
+    pulldown: cornerValue(
+      buffer.pulldownReference ?? ground,
+      corner,
+      "pulldown reference",
+    ),
+    powerClamp: cornerValue(
+      buffer.powerClampReference ?? voltage,
+      corner,
+      "power clamp reference",
+    ),
+    groundClamp: cornerValue(
+      buffer.groundClampReference ?? ground,
+      corner,
+      "ground clamp reference",
+    ),
   }
 }
 
@@ -82,26 +122,13 @@ export function resolveIbisReferences({
   const pullup = infer("pullup")
   const pulldown = infer("pulldown")
   if (voltageCheck) {
-    const { buffer, corner } = voltageCheck
-    const nominalPullup = cornerValue(
-      buffer.pullupReference ?? buffer.voltage,
-      corner,
-      "pullup reference",
-    )
-    const nominalPulldown = cornerValue(
-      buffer.pulldownReference ?? [0, 0, 0],
-      corner,
-      "pulldown reference",
-    )
+    const { buffer } = voltageCheck
+    const nominal = resolveIbisReferenceVoltages(voltageCheck)
     if (
       buffer.powerClamp &&
       !explicit.powerClamp &&
       !vendor?.powerClamp &&
-      cornerValue(
-        buffer.powerClampReference ?? buffer.voltage,
-        corner,
-        "power clamp reference",
-      ) !== nominalPullup
+      nominal.powerClamp !== nominal.pullup
     ) {
       throw new IbisReferenceError(
         "ambiguous",
@@ -112,11 +139,7 @@ export function resolveIbisReferences({
       buffer.groundClamp &&
       !explicit.groundClamp &&
       !vendor?.groundClamp &&
-      cornerValue(
-        buffer.groundClampReference ?? [0, 0, 0],
-        corner,
-        "ground clamp reference",
-      ) !== nominalPulldown
+      nominal.groundClamp !== nominal.pulldown
     ) {
       throw new IbisReferenceError(
         "ambiguous",

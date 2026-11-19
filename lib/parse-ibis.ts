@@ -52,12 +52,12 @@ export function ibisNumber(token: string): number | null {
 }
 
 export function cornerValue(
-  values: IbisRange,
+  values: IbisRange | undefined,
   corner: "typical" | "minimum" | "maximum",
   field: string,
 ): number {
-  const value = values[{ typical: 0, minimum: 1, maximum: 2 }[corner]]
-  if (value === null)
+  const value = values?.[{ typical: 0, minimum: 1, maximum: 2 }[corner]]
+  if (value === null || value === undefined)
     throw new IbisError("missing_corner", `${field} has no ${corner} value`)
   return value
 }
@@ -162,7 +162,6 @@ function parseBuffer(name: string, text: string): IbisBuffer {
     type: first.model_type?.[0]?.toLowerCase() ?? "",
     polarity: first.polarity?.[0]?.toLowerCase() as IbisBuffer["polarity"],
     enable: first.enable?.[0]?.toLowerCase() as IbisBuffer["enable"],
-    voltage: [null, null, null],
     capacitance: range(first.c_comp ?? []),
     waveforms: [],
   }
@@ -255,7 +254,14 @@ function parseBuffer(name: string, text: string): IbisBuffer {
           ibisNumber(fields.v_fixture_min?.[0] ?? String(fixture)),
           ibisNumber(fields.v_fixture_max?.[0] ?? String(fixture)),
         ],
-        data: table(section),
+        data: table(section).map(([time, typical, minimum, maximum]) => {
+          if (typical === null)
+            throw new IbisError(
+              "missing_corner",
+              `${name}: ${section.key} sample at ${time} s has no typical value`,
+            )
+          return [time, typical, minimum, maximum]
+        }),
       }
       buffer.waveforms.push(waveform)
     }
