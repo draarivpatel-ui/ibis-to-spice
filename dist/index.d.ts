@@ -156,6 +156,8 @@ interface IbisReferencePorts {
     groundClamp?: string;
     external?: string;
 }
+/** Resolved source ports for the four drive and clamp rails and the optional external rail. */
+type ResolvedIbisReferencePorts = Required<Omit<IbisReferencePorts, "external">> & Pick<IbisReferencePorts, "external">;
 interface IbisModelDefinition {
     source: IbisSource;
     component: string;
@@ -217,7 +219,7 @@ interface IbisConversionMetadata {
         enable?: string;
         enableControlLevel?: 0 | 1;
         runState: IbisPinRunState;
-        references: Required<Omit<IbisReferencePorts, "external">> & Pick<IbisReferencePorts, "external">;
+        references: ResolvedIbisReferencePorts;
         stimulusHash?: string;
     }>;
 }
@@ -313,4 +315,27 @@ declare function bitWeights(converted: ConvertedBuffer, schedule: LogicalSchedul
 /** Assemble reusable electrical definitions and one explicit run without protocol assumptions. */
 declare function convertIbisModelToSpice(input: string | Uint8Array, definition: IbisModelDefinition, run: IbisRunConfig): ConvertedGeneralIbisComponent;
 
-export { CONVERTER_VERSION, type ConvertedBuffer, type ConvertedGeneralIbisComponent, type ConvertedIbisComponent, type IbisBitsStimulus, type IbisBuffer, type IbisClock, type IbisComponent, type IbisConversionMetadata, type IbisCorner, type IbisDocument, IbisError, type IbisFetch, type IbisModelConfig, type IbisModelDefinition, type IbisPackagePin, type IbisPinBinding, type IbisPinRunState, type IbisRamp, type IbisRampRatio, type IbisRange, type IbisReferencePorts, type IbisRunConfig, type IbisSource, type IbisTable, type IbisTimeInput, type IbisWaveform, type LogicalSchedule, type LogicalTransition, bitWeights, bufferTables, clockWeights, convertIbisBuffer, convertIbisComponentToSpice, convertIbisModelToSpice, cornerValue, createIbisModelResolver, ibisNumber, ibisTimeSeconds, interpolate, loadIbisDefinitionSource, loadIbisSource, logicalBitSchedule, parseIbis, resolveIbisModel, seconds, sourceHash, spiceNumber, switchingWeights };
+declare const IBIS_REFERENCE_ERROR_CODES: {
+    readonly ambiguous: "ambiguous_reference";
+    readonly invalid: "invalid_reference";
+    readonly shorted: "invalid_reference";
+};
+/** The reason distinguishes shorted drive rails from malformed overrides. */
+declare class IbisReferenceError extends IbisError {
+    readonly reason: keyof typeof IBIS_REFERENCE_ERROR_CODES;
+    constructor(reason: keyof typeof IBIS_REFERENCE_ERROR_CODES, message: string);
+}
+/** Resolve the local reference ports for a physical IBIS signal pin. */
+declare function resolveIbisReferences({ component, pin, pinToSourcePort, explicitReferences, voltageCheck, }: {
+    component: IbisComponent;
+    pin: string;
+    pinToSourcePort: Readonly<Record<string, string>>;
+    explicitReferences?: IbisReferencePorts;
+    /** Check whether the selected buffer and corner require separate clamp rails. */
+    voltageCheck?: {
+        buffer: IbisBuffer;
+        corner: IbisCorner;
+    };
+}): ResolvedIbisReferencePorts;
+
+export { CONVERTER_VERSION, type ConvertedBuffer, type ConvertedGeneralIbisComponent, type ConvertedIbisComponent, IBIS_REFERENCE_ERROR_CODES, type IbisBitsStimulus, type IbisBuffer, type IbisClock, type IbisComponent, type IbisConversionMetadata, type IbisCorner, type IbisDocument, IbisError, type IbisFetch, type IbisModelConfig, type IbisModelDefinition, type IbisPackagePin, type IbisPinBinding, type IbisPinRunState, type IbisRamp, type IbisRampRatio, type IbisRange, IbisReferenceError, type IbisReferencePorts, type IbisRunConfig, type IbisSource, type IbisTable, type IbisTimeInput, type IbisWaveform, type LogicalSchedule, type LogicalTransition, type ResolvedIbisReferencePorts, bitWeights, bufferTables, clockWeights, convertIbisBuffer, convertIbisComponentToSpice, convertIbisModelToSpice, cornerValue, createIbisModelResolver, ibisNumber, ibisTimeSeconds, interpolate, loadIbisDefinitionSource, loadIbisSource, logicalBitSchedule, parseIbis, resolveIbisModel, resolveIbisReferences, seconds, sourceHash, spiceNumber, switchingWeights };

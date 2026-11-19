@@ -134,6 +134,10 @@ export interface IbisReferencePorts {
   groundClamp?: string
   external?: string
 }
+/** Resolved source ports for the four drive and clamp rails and the optional external rail. */
+export type ResolvedIbisReferencePorts =
+  Required<Omit<IbisReferencePorts, "external">> & Pick<IbisReferencePorts, "external">
+
 export interface IbisModelDefinition {
   source: IbisSource
   component: string
@@ -164,7 +168,7 @@ export interface IbisConversionMetadata {
   omissions: string[]
   packageData: { coupledModel?: string; mappedPins: Array<{ physicalPin: string; port: string; role: "signal" | "reference"; resistanceOhms: number | null; inductanceHenries: number | null; capacitanceFarads: number | null }> }
   differentialPins: IbisComponent["differentialPins"]
-  pins: Array<{ physicalPin: string; port: string; model: string; selector: string; selectorChoices: string[]; modelType: string; polarity: string; polarityDeclared: boolean; enable?: string; enableControlLevel?: 0 | 1; runState: IbisPinRunState; references: Required<Omit<IbisReferencePorts, "external">> & Pick<IbisReferencePorts, "external">; stimulusHash?: string }>
+  pins: Array<{ physicalPin: string; port: string; model: string; selector: string; selectorChoices: string[]; modelType: string; polarity: string; polarityDeclared: boolean; enable?: string; enableControlLevel?: 0 | 1; runState: IbisPinRunState; references: ResolvedIbisReferencePorts; stimulusHash?: string }>
 }
 export interface ConvertedGeneralIbisComponent extends ConvertedIbisComponent {
   metadata: IbisConversionMetadata

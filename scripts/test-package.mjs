@@ -33,13 +33,16 @@ try {
     devDependencies: { typescript: devDependencies.typescript },
   }))
   writeFileSync(join(consumer, "smoke.ts"), `
-import { convertIbisModelToSpice, loadIbisDefinitionSource, parseIbis, sourceHash, type IbisModelDefinition, type IbisRunConfig } from "@tscircuit/ibis-to-spice"
+import { convertIbisModelToSpice, loadIbisDefinitionSource, parseIbis, resolveIbisReferences, sourceHash, type IbisModelDefinition, type IbisRunConfig } from "@tscircuit/ibis-to-spice"
 const source = "[IBIS Ver] 4.2\\n[Component] C\\n[Pin] signal_name model_name\\n1 IN A\\n2 VDD POWER\\n3 VSS GND\\n[Model] A\\nModel_type Input\\nC_comp 1p 1p 1p\\n[Voltage Range] 1.5 1.4 1.6\\n[End]"
 const definition: IbisModelDefinition = { source: { content: source }, component: "C", pinMap: { "1": "IN", "2": "VDD", "3": "GND" }, corner: "typical", packagePolicy: "omit" }
 const run: IbisRunConfig = { duration: "1ns", pinStates: { IN: { mode: "input" } }, stimuli: {} }
-if (parseIbis(source).getBuffer("A").type !== "input") throw new Error("Root parser export failed")
+const document = parseIbis(source)
+if (document.getBuffer("A").type !== "input") throw new Error("Root parser export failed")
 if (await loadIbisDefinitionSource(definition.source) !== source) throw new Error("Root loader export failed")
 const converted = convertIbisModelToSpice(source, definition, run)
+const references = resolveIbisReferences({ component: document.components.C, pin: "1", pinToSourcePort: definition.pinMap })
+if (JSON.stringify(references) !== JSON.stringify(converted.metadata.pins[0].references)) throw new Error("Root reference resolution export failed")
 if (!converted.source.includes(".subckt") || converted.metadata.sourceSha256 !== sourceHash(source)) throw new Error("Root conversion export failed")
 `)
   const install = ["install", "--ignore-scripts", "--store-dir", join(temporary, "store")]
