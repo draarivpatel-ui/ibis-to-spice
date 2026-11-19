@@ -2,6 +2,7 @@ import type {
   IbisBuffer,
   IbisComponent,
   IbisDocument,
+  IbisRampRatio,
   IbisRange,
   IbisTable,
   IbisWaveform,
@@ -37,12 +38,12 @@ export function ibisNumber(token: string): number | null {
     f: 1e-15,
   }
   const suffix = match[2]
-  if (!/^[TGMkmunpf]?(?:V|A|Ohm|ohm|F|H|s)?$/.test(suffix))
+  if (!/^[TGMkmunpf]?(?:V|A|[Oo]hms?|F|H|s)?$/.test(suffix))
     throw new IbisError(
       "invalid_number",
       `Unsupported IBIS numeric suffix: ${token}`,
     )
-  // Units such as V, A, Ohm, F, H and s may follow a scale prefix.
+  // Units such as V, A, ohms, F, H and s may follow a scale prefix.
   const factor = scales[suffix[0]] ?? 1
   const value = Number(match[1]) * factor
   if (!Number.isFinite(value))
@@ -65,6 +66,20 @@ function range(tokens: string[]): IbisRange {
   return [0, 1, 2].map((index) =>
     ibisNumber(tokens[index] ?? "NA"),
   ) as IbisRange
+}
+
+function rampRatio(token?: string): IbisRampRatio | null {
+  const [voltageToken, timeToken, extra] = token?.split("/") ?? []
+  if (!voltageToken || !timeToken || extra !== undefined) return null
+  const voltage = ibisNumber(voltageToken)
+  const timeSeconds = ibisNumber(timeToken)
+  if (voltage === null || timeSeconds === null) return null
+  return { voltage, timeSeconds }
+}
+
+function rampRange(tokens: string[] = []): IbisRange<IbisRampRatio> {
+  const [typical, minimum, maximum] = tokens
+  return [rampRatio(typical), rampRatio(minimum), rampRatio(maximum)]
 }
 
 interface Section {
@@ -201,6 +216,15 @@ function parseBuffer(name: string, text: string): IbisBuffer {
     if (tables[section.key])
       (buffer as unknown as Record<string, unknown>)[tables[section.key]] =
         table(section)
+    if (section.key === "ramp") {
+      const fields = parameters(section)
+      buffer.ramp = {
+        rising: rampRange(fields["dv/dt_r"]),
+        falling: rampRange(fields["dv/dt_f"]),
+      }
+      const loadOhms = ibisNumber(fields.r_load?.[0] ?? "NA")
+      if (loadOhms !== null) buffer.ramp.loadOhms = loadOhms
+    }
     if (["rising waveform", "falling waveform"].includes(section.key)) {
       const fields = parameters(section)
       for (const field of [
