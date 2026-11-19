@@ -1,6 +1,23 @@
 export type IbisCorner = "typical" | "minimum" | "maximum"
-export type IbisRange = [number | null, number | null, number | null]
+export type IbisRange<T = number> = [
+  typical: T | null,
+  minimum: T | null,
+  maximum: T | null,
+]
 export type IbisTable = Array<[number, ...IbisRange]>
+
+/** The voltage swing in volts and elapsed time between 20% and 80% of an edge. */
+export interface IbisRampRatio {
+  voltage: number
+  timeSeconds: number
+}
+
+export interface IbisRamp {
+  rising: IbisRange<IbisRampRatio>
+  falling: IbisRange<IbisRampRatio>
+  /** The load resistance in ohms, when explicitly specified by R_load. */
+  loadOhms?: number
+}
 
 export interface IbisWaveform {
   kind: "rising" | "falling"
@@ -25,6 +42,7 @@ export interface IbisBuffer {
   powerClampReference?: IbisRange
   groundClampReference?: IbisRange
   externalReference?: IbisRange
+  ramp?: IbisRamp
   waveforms: IbisWaveform[]
 }
 

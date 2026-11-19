@@ -27,7 +27,7 @@ function ibisNumber(token) {
     f: 1e-15
   };
   const suffix = match[2];
-  if (!/^[TGMkmunpf]?(?:V|A|Ohm|ohm|F|H|s)?$/.test(suffix))
+  if (!/^[TGMkmunpf]?(?:V|A|[Oo]hms?|F|H|s)?$/.test(suffix))
     throw new IbisError(
       "invalid_number",
       `Unsupported IBIS numeric suffix: ${token}`
@@ -48,6 +48,18 @@ function range(tokens) {
   return [0, 1, 2].map(
     (index) => ibisNumber(tokens[index] ?? "NA")
   );
+}
+function rampRatio(token) {
+  const [voltageToken, timeToken, extra] = token?.split("/") ?? [];
+  if (!voltageToken || !timeToken || extra !== void 0) return null;
+  const voltage = ibisNumber(voltageToken);
+  const timeSeconds = ibisNumber(timeToken);
+  if (voltage === null || timeSeconds === null) return null;
+  return { voltage, timeSeconds };
+}
+function rampRange(tokens = []) {
+  const [typical, minimum, maximum] = tokens;
+  return [rampRatio(typical), rampRatio(minimum), rampRatio(maximum)];
 }
 function sections(text) {
   const headers = [
@@ -164,6 +176,15 @@ function parseBuffer(name, text) {
       buffer[scalarFields[section.key]] = range(section.argument.split(/\s+/));
     if (tables[section.key])
       buffer[tables[section.key]] = table(section);
+    if (section.key === "ramp") {
+      const fields = parameters(section);
+      buffer.ramp = {
+        rising: rampRange(fields["dv/dt_r"]),
+        falling: rampRange(fields["dv/dt_f"])
+      };
+      const loadOhms = ibisNumber(fields.r_load?.[0] ?? "NA");
+      if (loadOhms !== null) buffer.ramp.loadOhms = loadOhms;
+    }
     if (["rising waveform", "falling waveform"].includes(section.key)) {
       const fields = parameters(section);
       for (const field of [
